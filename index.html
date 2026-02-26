@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Climb Mini App</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --card: #111827;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --accent: #f59e0b;
+      --ok: #22c55e;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: radial-gradient(circle at 20% 0%, #1f2937 0%, var(--bg) 55%);
+      color: var(--text);
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      padding: 12px;
+    }
+
+    .app {
+      width: min(100%, 500px);
+      background: color-mix(in srgb, var(--card) 92%, #000);
+      border: 1px solid #1f2937;
+      border-radius: 16px;
+      padding: 14px;
+      box-shadow: 0 14px 35px rgba(0, 0, 0, 0.35);
+    }
+
+    .top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 20px;
+      letter-spacing: 0.2px;
+    }
+
+    .stats {
+      text-align: right;
+      font-size: 14px;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+
+    #height { color: var(--accent); font-weight: 700; }
+    #best { color: var(--ok); font-weight: 700; }
+
+    #message {
+      min-height: 20px;
+      font-size: 14px;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    .board-wrap {
+      width: 100%;
+      aspect-ratio: 9 / 16;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid #253041;
+      background: #0b1220;
+      touch-action: none;
+      position: relative;
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .hint {
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <div class="top">
+      <h1>Climb Up</h1>
+      <div class="stats">
+        <div>Высота: <span id="height">0 м</span></div>
+        <div>Рекорд: <span id="best">0 м</span></div>
+      </div>
+    </div>
+
+    <div id="message">Зажми экран и тяни молот, чтобы отталкиваться</div>
+
+    <div class="board-wrap" id="boardWrap">
+      <canvas id="gameCanvas" width="540" height="960"></canvas>
+    </div>
+
+    <div class="hint">Управление: зажми и веди палец/мышь. Цель: добраться до флага.</div>
+  </main>
+
+  <script>
+    const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+
+    if (tg) {
+      tg.ready();
+      tg.expand();
+      const root = document.documentElement.style;
+      root.setProperty('--bg', tg.themeParams.bg_color || '#0b1220');
+      root.setProperty('--text', tg.themeParams.text_color || '#e5e7eb');
+      tg.MainButton.setText('Начать заново');
+      tg.MainButton.hide();
+    }
+
+    const wrap = document.getElementById('boardWrap');
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    const heightEl = document.getElementById('height');
+    const bestEl = document.getElementById('best');
+    const messageEl = document.getElementById('message');
+
+    const W = canvas.width;
+    const H = canvas.height;
+    const dt = 1 / 60;
+
+    const START_Y = 850;
+    const GOAL_Y = -1650;
+    const G = 1500;
+
+    const player = {
+      x: 120,
+      y: START_Y,
+      vx: 0,
+      vy: 0,
+      r: 26,
+      hammerLen: 130,
+      tipR: 10,
+      tipX: 0,
+      tipY: 0,
+    };
+
+    const pointer = {
+      active: false,
+      x: player.x + 120,
+      y: player.y - 30,
+      prevX: player.x + 120,
+      prevY: player.y - 30,
+      worldX: player.x + 120,
+      worldY: player.y - 30,
+    };
+
+    let cameraY = START_Y - H * 0.6;
+    let won = false;
+    let justTouched = false;
+    let best = Number(localStorage.getItem('climb_best') || 0);
+
+    const obstacles = [
+      { x: -280, y: 930, w: 1100, h: 120 },
+      { x: 210, y: 730, w: 300, h: 30 },
+      { x: -260, y: 560, w: 270, h: 34 },
+      { x: 130, y: 430, w: 120, h: 28 },
+      { x: 270, y: 320, w: 220, h: 30 },
+      { x: -220, y: 210, w: 220, h: 30 },
+      { x: 80, y: 80, w: 360, h: 26 },
+      { x: 420, y: -40, w: 120, h: 26 },
+      { x: 10, y: -170, w: 170, h: 26 },
+      { x: -200, y: -300, w: 220, h: 28 },
+      { x: 240, y: -420, w: 280, h: 26 },
+      { x: 360, y: -560, w: 120, h: 28 },
+      { x: -220, y: -700, w: 320, h: 26 },
+      { x: 130, y: -820, w: 100, h: 28 },
+      { x: 250, y: -950, w: 260, h: 26 },
+      { x: -180, y: -1080, w: 220, h: 28 },
+      { x: 40, y: -1220, w: 220, h: 26 },
+      { x: 300, y: -1350, w: 200, h: 26 },
+      { x: -220, y: -1480, w: 320, h: 28 },
+      { x: 130, y: -1610, w: 320, h: 26 },
+    ];
+
+    function clamp(v, min, max) {
+      return Math.max(min, Math.min(max, v));
+    }
+
+    function len(x, y) {
+      return Math.hypot(x, y);
+    }
+
+    function getClosestPointRect(px, py, r) {
+      const cx = clamp(px, r.x, r.x + r.w);
+      const cy = clamp(py, r.y, r.y + r.h);
+      return { x: cx, y: cy };
+    }
+
+    function circleRectResolve(px, py, cr, rect) {
+      const cp = getClosestPointRect(px, py, rect);
+      let dx = px - cp.x;
+      let dy = py - cp.y;
+      let dist = len(dx, dy);
+
+      if (dist === 0) {
+        const left = Math.abs(px - rect.x);
+        const right = Math.abs(px - (rect.x + rect.w));
+        const top = Math.abs(py - rect.y);
+        const bottom = Math.abs(py - (rect.y + rect.h));
+        const m = Math.min(left, right, top, bottom);
+        if (m === left) { dx = -1; dy = 0; }
+        else if (m === right) { dx = 1; dy = 0; }
+        else if (m === top) { dx = 0; dy = -1; }
+        else { dx = 0; dy = 1; }
+        dist = 1;
+      }
+
+      if (dist < cr) {
+        const nx = dx / dist;
+        const ny = dy / dist;
+        return {
+          hit: true,
+          nx,
+          ny,
+          overlap: cr - dist,
+          contactX: cp.x,
+          contactY: cp.y,
+        };
+      }
+
+      return { hit: false };
+    }
+
+    function updateStats() {
+      const climbed = Math.max(0, Math.round((START_Y - player.y) / 20));
+      if (climbed > best) {
+        best = climbed;
+        localStorage.setItem('climb_best', String(best));
+      }
+      heightEl.textContent = `${climbed} м`;
+      bestEl.textContent = `${best} м`;
+    }
+
+    function resetGame() {
+      player.x = 120;
+      player.y = START_Y;
+      player.vx = 0;
+      player.vy = 0;
+      pointer.active = false;
+      pointer.x = player.x + 120;
+      pointer.y = player.y - 30;
+      pointer.prevX = pointer.x;
+      pointer.prevY = pointer.y;
+      pointer.worldX = pointer.x;
+      pointer.worldY = pointer.y;
+      cameraY = START_Y - H * 0.6;
+      won = false;
+      justTouched = false;
+      messageEl.textContent = 'Зажми экран и тяни молот, чтобы отталкиваться';
+      updateStats();
+      if (tg) tg.MainButton.hide();
+    }
+
+    function onWin() {
+      if (won) return;
+      won = true;
+      messageEl.textContent = 'Финиш! Ты добрался до вершины.';
+      if (tg) {
+        tg.HapticFeedback.notificationOccurred('success');
+        tg.MainButton.show();
+      }
+    }
+
+    function updatePointer(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const x = (clientX - rect.left) * (canvas.width / rect.width);
+      const y = (clientY - rect.top) * (canvas.height / rect.height);
+
+      pointer.prevX = pointer.x;
+      pointer.prevY = pointer.y;
+      pointer.x = x;
+      pointer.y = y;
+      pointer.worldX = x;
+      pointer.worldY = y + cameraY;
+    }
+
+    function update() {
+      if (won) return;
+
+      player.vy += G * dt;
+      player.vx *= 0.996;
+      player.vy *= 0.996;
+
+      player.vx = clamp(player.vx, -1100, 1100);
+      player.vy = clamp(player.vy, -1300, 1600);
+
+      player.x += player.vx * dt;
+      player.y += player.vy * dt;
+
+      for (const r of obstacles) {
+        const col = circleRectResolve(player.x, player.y, player.r, r);
+        if (!col.hit) continue;
+
+        player.x += col.nx * col.overlap;
+        player.y += col.ny * col.overlap;
+
+        const vn = player.vx * col.nx + player.vy * col.ny;
+        if (vn < 0) {
+          player.vx -= vn * col.nx;
+          player.vy -= vn * col.ny;
+        }
+      }
+
+      let dx = pointer.worldX - player.x;
+      let dy = pointer.worldY - player.y;
+      let d = len(dx, dy);
+      if (d < 0.001) {
+        dx = 1;
+        dy = 0;
+        d = 1;
+      }
+
+      const ux = dx / d;
+      const uy = dy / d;
+      const targetTipX = player.x + ux * player.hammerLen;
+      const targetTipY = player.y + uy * player.hammerLen;
+
+      player.tipX = targetTipX;
+      player.tipY = targetTipY;
+
+      let bestHit = null;
+      for (const r of obstacles) {
+        const col = circleRectResolve(targetTipX, targetTipY, player.tipR, r);
+        if (!col.hit) continue;
+        if (!bestHit || col.overlap > bestHit.overlap) {
+          bestHit = col;
+        }
+      }
+
+      if (bestHit) {
+        const tipX = bestHit.contactX + bestHit.nx * player.tipR;
+        const tipY = bestHit.contactY + bestHit.ny * player.tipR;
+        player.tipX = tipX;
+        player.tipY = tipY;
+
+        const newX = tipX - ux * player.hammerLen;
+        const newY = tipY - uy * player.hammerLen;
+
+        const pushX = newX - player.x;
+        const pushY = newY - player.y;
+
+        player.x = newX;
+        player.y = newY;
+
+        player.vx += (pushX / dt) * 0.33;
+        player.vy += (pushY / dt) * 0.33;
+
+        if (!justTouched && tg) {
+          tg.HapticFeedback.impactOccurred('light');
+          justTouched = true;
+        }
+      } else {
+        justTouched = false;
+      }
+
+      if (player.y > 1250) {
+        messageEl.textContent = 'Упал вниз. Продолжай, ты уже знаешь маршрут.';
+        player.y = 980;
+        player.vx *= 0.2;
+        player.vy = 0;
+      }
+
+      if (player.y <= GOAL_Y) onWin();
+
+      cameraY += ((player.y - H * 0.58) - cameraY) * 0.1;
+      cameraY = Math.min(cameraY, START_Y - H * 0.6);
+
+      updateStats();
+    }
+
+    function drawBackground() {
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, '#0f172a');
+      g.addColorStop(0.6, '#0b1220');
+      g.addColorStop(1, '#050a14');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    function drawWorld() {
+      ctx.save();
+      ctx.translate(0, -cameraY);
+
+      for (const r of obstacles) {
+        ctx.fillStyle = '#334155';
+        ctx.fillRect(r.x, r.y, r.w, r.h);
+
+        ctx.fillStyle = '#475569';
+        ctx.fillRect(r.x, r.y, r.w, 6);
+      }
+
+      ctx.strokeStyle = '#fde047';
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(70, GOAL_Y + 120);
+      ctx.lineTo(70, GOAL_Y + 50);
+      ctx.stroke();
+
+      ctx.fillStyle = '#f97316';
+      ctx.beginPath();
+      ctx.moveTo(72, GOAL_Y + 50);
+      ctx.lineTo(150, GOAL_Y + 76);
+      ctx.lineTo(72, GOAL_Y + 102);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 8;
+      ctx.beginPath();
+      ctx.moveTo(player.x, player.y);
+      ctx.lineTo(player.tipX, player.tipY);
+      ctx.stroke();
+
+      ctx.fillStyle = '#f97316';
+      ctx.beginPath();
+      ctx.arc(player.tipX, player.tipY, player.tipR, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#2563eb';
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.r, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#93c5fd';
+      ctx.beginPath();
+      ctx.arc(player.x + 6, player.y - 6, player.r * 0.35, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    function frame() {
+      update();
+      drawBackground();
+      drawWorld();
+      requestAnimationFrame(frame);
+    }
+
+    wrap.addEventListener('pointerdown', (e) => {
+      pointer.active = true;
+      wrap.setPointerCapture(e.pointerId);
+      updatePointer(e.clientX, e.clientY);
+      messageEl.textContent = 'Тяни молот по дуге, чтобы набрать импульс';
+    });
+
+    wrap.addEventListener('pointermove', (e) => {
+      if (!pointer.active) return;
+      updatePointer(e.clientX, e.clientY);
+    });
+
+    wrap.addEventListener('pointerup', (e) => {
+      pointer.active = false;
+      wrap.releasePointerCapture(e.pointerId);
+    });
+
+    wrap.addEventListener('pointercancel', (e) => {
+      pointer.active = false;
+      wrap.releasePointerCapture(e.pointerId);
+    });
+
+    tg && tg.MainButton.onClick(() => resetGame());
+
+    resetGame();
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>
