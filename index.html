@@ -13,6 +13,7 @@
       --muted: #94a3b8;
       --accent: #f59e0b;
       --ok: #22c55e;
+      --danger: #ef4444;
     }
 
     * { box-sizing: border-box; }
@@ -29,7 +30,7 @@
     }
 
     .app {
-      width: min(100%, 500px);
+      width: min(100%, 520px);
       background: color-mix(in srgb, var(--card) 92%, #000);
       border: 1px solid #1f2937;
       border-radius: 16px;
@@ -41,7 +42,7 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
       margin-bottom: 10px;
     }
 
@@ -53,13 +54,14 @@
 
     .stats {
       text-align: right;
-      font-size: 14px;
+      font-size: 13px;
       color: var(--muted);
-      line-height: 1.35;
+      line-height: 1.4;
     }
 
     #height { color: var(--accent); font-weight: 700; }
     #best { color: var(--ok); font-weight: 700; }
+    #progress { color: #60a5fa; font-weight: 700; }
 
     #message {
       min-height: 20px;
@@ -90,6 +92,11 @@
       font-size: 13px;
       color: var(--muted);
     }
+
+    .danger {
+      color: var(--danger);
+      font-weight: 700;
+    }
   </style>
 </head>
 <body>
@@ -98,17 +105,19 @@
       <h1>Climb Up</h1>
       <div class="stats">
         <div>Высота: <span id="height">0 м</span></div>
+        <div>Прогресс: <span id="progress">0%</span></div>
         <div>Рекорд: <span id="best">0 м</span></div>
+        <div>Время: <span id="timer">00:00</span></div>
       </div>
     </div>
 
-    <div id="message">Зажми экран и тяни молот, чтобы отталкиваться</div>
+    <div id="message">Зажми экран и веди молот. Клавиши: стрелки + W/S</div>
 
     <div class="board-wrap" id="boardWrap">
       <canvas id="gameCanvas" width="540" height="960"></canvas>
     </div>
 
-    <div class="hint">Управление: зажми и веди палец/мышь. Цель: добраться до флага.</div>
+    <div class="hint">Цель: добраться до флага. При падении ты вернёшься к последнему чекпоинту.</div>
   </main>
 
   <script>
@@ -129,24 +138,26 @@
     const ctx = canvas.getContext('2d');
 
     const heightEl = document.getElementById('height');
+    const progressEl = document.getElementById('progress');
     const bestEl = document.getElementById('best');
+    const timerEl = document.getElementById('timer');
     const messageEl = document.getElementById('message');
 
     const W = canvas.width;
     const H = canvas.height;
     const dt = 1 / 60;
 
-    const START_Y = 850;
-    const GOAL_Y = -1650;
-    const G = 1500;
+    const START_Y = 900;
+    const GOAL_Y = -2400;
+    const G = 1700;
 
     const player = {
-      x: 120,
+      x: 130,
       y: START_Y,
       vx: 0,
       vy: 0,
-      r: 26,
-      hammerLen: 130,
+      r: 24,
+      hammerLen: 138,
       tipR: 10,
       tipX: 0,
       tipY: 0,
@@ -154,40 +165,63 @@
 
     const pointer = {
       active: false,
-      x: player.x + 120,
-      y: player.y - 30,
-      prevX: player.x + 120,
-      prevY: player.y - 30,
       worldX: player.x + 120,
-      worldY: player.y - 30,
+      worldY: player.y,
+      prevWorldX: player.x + 120,
+      prevWorldY: player.y,
+      angle: -0.2,
+      radius: 150,
     };
+
+    const keys = {
+      ArrowLeft: false,
+      ArrowRight: false,
+      ArrowUp: false,
+      ArrowDown: false,
+      KeyW: false,
+      KeyS: false,
+    };
+
+    const particles = [];
 
     let cameraY = START_Y - H * 0.6;
     let won = false;
+    let started = false;
     let justTouched = false;
     let best = Number(localStorage.getItem('climb_best') || 0);
+    let bestTime = Number(localStorage.getItem('climb_best_time') || 0);
+    let startMs = 0;
+    let elapsedMs = 0;
+
+    let checkpointX = player.x;
+    let checkpointY = player.y;
 
     const obstacles = [
-      { x: -280, y: 930, w: 1100, h: 120 },
-      { x: 210, y: 730, w: 300, h: 30 },
-      { x: -260, y: 560, w: 270, h: 34 },
-      { x: 130, y: 430, w: 120, h: 28 },
-      { x: 270, y: 320, w: 220, h: 30 },
-      { x: -220, y: 210, w: 220, h: 30 },
-      { x: 80, y: 80, w: 360, h: 26 },
-      { x: 420, y: -40, w: 120, h: 26 },
-      { x: 10, y: -170, w: 170, h: 26 },
-      { x: -200, y: -300, w: 220, h: 28 },
-      { x: 240, y: -420, w: 280, h: 26 },
-      { x: 360, y: -560, w: 120, h: 28 },
-      { x: -220, y: -700, w: 320, h: 26 },
-      { x: 130, y: -820, w: 100, h: 28 },
-      { x: 250, y: -950, w: 260, h: 26 },
-      { x: -180, y: -1080, w: 220, h: 28 },
-      { x: 40, y: -1220, w: 220, h: 26 },
-      { x: 300, y: -1350, w: 200, h: 26 },
-      { x: -220, y: -1480, w: 320, h: 28 },
-      { x: 130, y: -1610, w: 320, h: 26 },
+      { x: -300, y: 980, w: 1200, h: 120, type: 'rock' },
+      { x: 230, y: 790, w: 280, h: 28, type: 'rock' },
+      { x: -240, y: 640, w: 240, h: 30, type: 'rock' },
+      { x: 120, y: 510, w: 120, h: 26, type: 'rock' },
+      { x: 260, y: 385, w: 220, h: 26, type: 'rock' },
+      { x: -210, y: 260, w: 220, h: 28, type: 'rock' },
+      { x: 70, y: 130, w: 320, h: 24, type: 'ice' },
+      { x: 400, y: 10, w: 130, h: 24, type: 'ice' },
+      { x: 20, y: -120, w: 180, h: 24, type: 'rock' },
+      { x: -200, y: -260, w: 220, h: 26, type: 'rock' },
+      { x: 250, y: -400, w: 260, h: 24, type: 'rock' },
+      { x: 380, y: -550, w: 130, h: 24, type: 'bounce' },
+      { x: -220, y: -700, w: 320, h: 24, type: 'rock' },
+      { x: 120, y: -840, w: 90, h: 28, type: 'rock' },
+      { x: 250, y: -980, w: 260, h: 24, type: 'rock' },
+      { x: -180, y: -1120, w: 220, h: 28, type: 'ice' },
+      { x: 40, y: -1260, w: 220, h: 24, type: 'rock' },
+      { x: 300, y: -1410, w: 200, h: 24, type: 'rock' },
+      { x: -230, y: -1560, w: 320, h: 26, type: 'rock' },
+      { x: 120, y: -1700, w: 320, h: 24, type: 'rock' },
+      { x: -230, y: -1840, w: 220, h: 24, type: 'ice' },
+      { x: 90, y: -1990, w: 140, h: 24, type: 'bounce' },
+      { x: 260, y: -2140, w: 260, h: 24, type: 'rock' },
+      { x: -220, y: -2280, w: 220, h: 24, type: 'rock' },
+      { x: 120, y: -2410, w: 320, h: 24, type: 'rock' },
     ];
 
     function clamp(v, min, max) {
@@ -196,6 +230,13 @@
 
     function len(x, y) {
       return Math.hypot(x, y);
+    }
+
+    function formatTime(ms) {
+      const total = Math.floor(ms / 1000);
+      const mm = String(Math.floor(total / 60)).padStart(2, '0');
+      const ss = String(total % 60).padStart(2, '0');
+      return `${mm}:${ss}`;
     }
 
     function getClosestPointRect(px, py, r) {
@@ -239,68 +280,148 @@
       return { hit: false };
     }
 
+    function emitParticles(x, y, color, count, speed) {
+      for (let i = 0; i < count; i += 1) {
+        const a = Math.random() * Math.PI * 2;
+        const s = Math.random() * speed;
+        particles.push({
+          x,
+          y,
+          vx: Math.cos(a) * s,
+          vy: Math.sin(a) * s,
+          life: 0.4 + Math.random() * 0.4,
+          age: 0,
+          color,
+          size: 2 + Math.random() * 3,
+        });
+      }
+    }
+
     function updateStats() {
       const climbed = Math.max(0, Math.round((START_Y - player.y) / 20));
+      const total = START_Y - GOAL_Y;
+      const progress = clamp(Math.round(((START_Y - player.y) / total) * 100), 0, 100);
+
       if (climbed > best) {
         best = climbed;
         localStorage.setItem('climb_best', String(best));
       }
+
       heightEl.textContent = `${climbed} м`;
+      progressEl.textContent = `${progress}%`;
       bestEl.textContent = `${best} м`;
+
+      if (started && !won) {
+        elapsedMs = performance.now() - startMs;
+      }
+      timerEl.textContent = formatTime(elapsedMs);
     }
 
     function resetGame() {
-      player.x = 120;
+      player.x = 130;
       player.y = START_Y;
       player.vx = 0;
       player.vy = 0;
+
       pointer.active = false;
-      pointer.x = player.x + 120;
-      pointer.y = player.y - 30;
-      pointer.prevX = pointer.x;
-      pointer.prevY = pointer.y;
-      pointer.worldX = pointer.x;
-      pointer.worldY = pointer.y;
+      pointer.angle = -0.2;
+      pointer.radius = 150;
+      pointer.worldX = player.x + Math.cos(pointer.angle) * pointer.radius;
+      pointer.worldY = player.y + Math.sin(pointer.angle) * pointer.radius;
+      pointer.prevWorldX = pointer.worldX;
+      pointer.prevWorldY = pointer.worldY;
+
       cameraY = START_Y - H * 0.6;
       won = false;
+      started = false;
       justTouched = false;
-      messageEl.textContent = 'Зажми экран и тяни молот, чтобы отталкиваться';
+      particles.length = 0;
+
+      checkpointX = player.x;
+      checkpointY = player.y;
+
+      elapsedMs = 0;
+      startMs = 0;
+
+      messageEl.innerHTML = 'Зажми экран и веди молот. Клавиши: стрелки + W/S';
       updateStats();
+
       if (tg) tg.MainButton.hide();
+    }
+
+    function startRunIfNeeded() {
+      if (started) return;
+      started = true;
+      startMs = performance.now();
     }
 
     function onWin() {
       if (won) return;
       won = true;
-      messageEl.textContent = 'Финиш! Ты добрался до вершины.';
+      messageEl.innerHTML = `Финиш! Время: <span class="danger">${formatTime(elapsedMs)}</span>`;
+
+      if (!bestTime || elapsedMs < bestTime) {
+        bestTime = Math.floor(elapsedMs);
+        localStorage.setItem('climb_best_time', String(bestTime));
+      }
+
       if (tg) {
         tg.HapticFeedback.notificationOccurred('success');
         tg.MainButton.show();
       }
+
+      emitParticles(player.x, player.y - 20, '#f59e0b', 36, 220);
     }
 
-    function updatePointer(clientX, clientY) {
+    function screenToWorld(clientX, clientY) {
       const rect = canvas.getBoundingClientRect();
       const x = (clientX - rect.left) * (canvas.width / rect.width);
       const y = (clientY - rect.top) * (canvas.height / rect.height);
-
-      pointer.prevX = pointer.x;
-      pointer.prevY = pointer.y;
-      pointer.x = x;
-      pointer.y = y;
-      pointer.worldX = x;
-      pointer.worldY = y + cameraY;
+      return { x, y: y + cameraY };
     }
 
-    function update() {
+    function updatePointerFromInput(clientX, clientY) {
+      const w = screenToWorld(clientX, clientY);
+      pointer.prevWorldX = pointer.worldX;
+      pointer.prevWorldY = pointer.worldY;
+      pointer.worldX = w.x;
+      pointer.worldY = w.y;
+
+      const dx = pointer.worldX - player.x;
+      const dy = pointer.worldY - player.y;
+      pointer.angle = Math.atan2(dy, dx);
+      pointer.radius = clamp(len(dx, dy), 90, 230);
+
+      startRunIfNeeded();
+    }
+
+    function updateKeyboardPointer() {
+      if (pointer.active) return;
+
+      const lr = (keys.ArrowRight ? 1 : 0) - (keys.ArrowLeft ? 1 : 0);
+      const ud = (keys.ArrowDown || keys.KeyS ? 1 : 0) - (keys.ArrowUp || keys.KeyW ? 1 : 0);
+      if (lr !== 0 || ud !== 0) startRunIfNeeded();
+
+      pointer.angle += lr * 2.6 * dt;
+      pointer.radius = clamp(pointer.radius + ud * 140 * dt, 90, 230);
+
+      pointer.prevWorldX = pointer.worldX;
+      pointer.prevWorldY = pointer.worldY;
+      pointer.worldX = player.x + Math.cos(pointer.angle) * pointer.radius;
+      pointer.worldY = player.y + Math.sin(pointer.angle) * pointer.radius;
+    }
+
+    function updatePhysics() {
       if (won) return;
 
-      player.vy += G * dt;
-      player.vx *= 0.996;
-      player.vy *= 0.996;
+      updateKeyboardPointer();
 
-      player.vx = clamp(player.vx, -1100, 1100);
-      player.vy = clamp(player.vy, -1300, 1600);
+      player.vy += G * dt;
+      player.vx *= 0.998;
+      player.vy *= 0.998;
+
+      player.vx = clamp(player.vx, -1250, 1250);
+      player.vy = clamp(player.vy, -1400, 1800);
 
       player.x += player.vx * dt;
       player.y += player.vy * dt;
@@ -314,19 +435,22 @@
 
         const vn = player.vx * col.nx + player.vy * col.ny;
         if (vn < 0) {
-          player.vx -= vn * col.nx;
-          player.vy -= vn * col.ny;
+          let bounce = 0;
+          if (r.type === 'bounce') bounce = 0.36;
+          player.vx -= (1 + bounce) * vn * col.nx;
+          player.vy -= (1 + bounce) * vn * col.ny;
+        }
+
+        if (r.type === 'ice') {
+          player.vx *= 1.002;
+        } else {
+          player.vx *= 0.994;
         }
       }
 
-      let dx = pointer.worldX - player.x;
-      let dy = pointer.worldY - player.y;
-      let d = len(dx, dy);
-      if (d < 0.001) {
-        dx = 1;
-        dy = 0;
-        d = 1;
-      }
+      const dx = pointer.worldX - player.x;
+      const dy = pointer.worldY - player.y;
+      const d = Math.max(len(dx, dy), 0.001);
 
       const ux = dx / d;
       const uy = dy / d;
@@ -337,11 +461,13 @@
       player.tipY = targetTipY;
 
       let bestHit = null;
+      let hitSurface = null;
       for (const r of obstacles) {
         const col = circleRectResolve(targetTipX, targetTipY, player.tipR, r);
         if (!col.hit) continue;
         if (!bestHit || col.overlap > bestHit.overlap) {
           bestHit = col;
+          hitSurface = r;
         }
       }
 
@@ -360,39 +486,117 @@
         player.x = newX;
         player.y = newY;
 
-        player.vx += (pushX / dt) * 0.33;
-        player.vy += (pushY / dt) * 0.33;
+        const pointerSpeed = len(
+          pointer.worldX - pointer.prevWorldX,
+          pointer.worldY - pointer.prevWorldY
+        ) / dt;
 
-        if (!justTouched && tg) {
-          tg.HapticFeedback.impactOccurred('light');
+        let impulse = 0.23 + clamp(pointerSpeed / 2200, 0, 0.85);
+        if (!pointer.active) impulse *= 0.65;
+        if (hitSurface && hitSurface.type === 'bounce') impulse *= 1.3;
+
+        player.vx += (pushX / dt) * impulse;
+        player.vy += (pushY / dt) * impulse;
+
+        if (!justTouched) {
+          if (tg) tg.HapticFeedback.impactOccurred('light');
+          emitParticles(tipX, tipY, '#f59e0b', 5, 120);
           justTouched = true;
         }
       } else {
         justTouched = false;
       }
 
-      if (player.y > 1250) {
-        messageEl.textContent = 'Упал вниз. Продолжай, ты уже знаешь маршрут.';
-        player.y = 980;
-        player.vx *= 0.2;
-        player.vy = 0;
+      if (player.y < checkpointY - 180) {
+        checkpointY = player.y;
+        checkpointX = player.x;
+      }
+
+      if (player.y > checkpointY + 760) {
+        player.x = checkpointX;
+        player.y = checkpointY + 30;
+        player.vx *= 0.12;
+        player.vy = -80;
+        messageEl.innerHTML = 'Срыв. Возврат к чекпоинту.';
+        emitParticles(player.x, player.y, '#ef4444', 16, 260);
       }
 
       if (player.y <= GOAL_Y) onWin();
 
-      cameraY += ((player.y - H * 0.58) - cameraY) * 0.1;
+      cameraY += ((player.y - H * 0.58) - cameraY) * 0.11;
       cameraY = Math.min(cameraY, START_Y - H * 0.6);
+    }
 
-      updateStats();
+    function updateParticles() {
+      for (let i = particles.length - 1; i >= 0; i -= 1) {
+        const p = particles[i];
+        p.age += dt;
+        if (p.age >= p.life) {
+          particles.splice(i, 1);
+          continue;
+        }
+        p.vy += 380 * dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+      }
     }
 
     function drawBackground() {
-      const g = ctx.createLinearGradient(0, 0, 0, H);
-      g.addColorStop(0, '#0f172a');
-      g.addColorStop(0.6, '#0b1220');
-      g.addColorStop(1, '#050a14');
-      ctx.fillStyle = g;
+      const sky = ctx.createLinearGradient(0, 0, 0, H);
+      sky.addColorStop(0, '#13213a');
+      sky.addColorStop(0.5, '#0e1a2f');
+      sky.addColorStop(1, '#060c18');
+      ctx.fillStyle = sky;
       ctx.fillRect(0, 0, W, H);
+
+      const moonX = W * 0.76;
+      const moonY = H * 0.16;
+      const moonGlow = ctx.createRadialGradient(moonX, moonY, 10, moonX, moonY, 170);
+      moonGlow.addColorStop(0, 'rgba(253, 224, 71, 0.45)');
+      moonGlow.addColorStop(1, 'rgba(253, 224, 71, 0)');
+      ctx.fillStyle = moonGlow;
+      ctx.fillRect(0, 0, W, H);
+
+      function drawMountainLayer(color, alpha, heightMul, wave, speed) {
+        const yBase = H * heightMul;
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(0, H);
+        for (let x = 0; x <= W; x += 18) {
+          const y = yBase + Math.sin((x * 0.013) + cameraY * speed) * wave;
+          ctx.lineTo(x, y);
+        }
+        ctx.lineTo(W, H);
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
+      drawMountainLayer('#1f2e4a', 0.55, 0.72, 26, 0.0028);
+      drawMountainLayer('#18263e', 0.65, 0.79, 18, 0.0018);
+      drawMountainLayer('#122036', 0.78, 0.86, 12, 0.0011);
+
+      ctx.globalAlpha = 0.35;
+      for (let i = 0; i < 34; i += 1) {
+        const x = (i * 71) % W;
+        const y = ((i * 163) + cameraY * 0.2) % H;
+        ctx.fillStyle = '#93c5fd';
+        ctx.fillRect(x, y, 2, 2);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    function colorByType(type) {
+      if (type === 'ice') return '#2563eb';
+      if (type === 'bounce') return '#7c3aed';
+      return '#334155';
+    }
+
+    function topByType(type) {
+      if (type === 'ice') return '#60a5fa';
+      if (type === 'bounce') return '#a78bfa';
+      return '#475569';
     }
 
     function drawWorld() {
@@ -400,55 +604,126 @@
       ctx.translate(0, -cameraY);
 
       for (const r of obstacles) {
-        ctx.fillStyle = '#334155';
+        const base = colorByType(r.type);
+        const top = topByType(r.type);
+        const grad = ctx.createLinearGradient(r.x, r.y, r.x, r.y + r.h);
+        grad.addColorStop(0, top);
+        grad.addColorStop(1, base);
+
+        ctx.fillStyle = grad;
         ctx.fillRect(r.x, r.y, r.w, r.h);
 
-        ctx.fillStyle = '#475569';
-        ctx.fillRect(r.x, r.y, r.w, 6);
+        ctx.globalAlpha = 0.22;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(r.x + 4, r.y + r.h - 4, r.w - 8, 3);
+        ctx.globalAlpha = 1;
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+        ctx.fillRect(r.x, r.y, r.w, 4);
       }
 
       ctx.strokeStyle = '#fde047';
       ctx.lineWidth = 5;
       ctx.beginPath();
-      ctx.moveTo(70, GOAL_Y + 120);
-      ctx.lineTo(70, GOAL_Y + 50);
+      ctx.moveTo(72, GOAL_Y + 120);
+      ctx.lineTo(72, GOAL_Y + 50);
       ctx.stroke();
 
       ctx.fillStyle = '#f97316';
       ctx.beginPath();
-      ctx.moveTo(72, GOAL_Y + 50);
-      ctx.lineTo(150, GOAL_Y + 76);
-      ctx.lineTo(72, GOAL_Y + 102);
+      ctx.moveTo(74, GOAL_Y + 50);
+      ctx.lineTo(154, GOAL_Y + 78);
+      ctx.lineTo(74, GOAL_Y + 106);
       ctx.closePath();
       ctx.fill();
 
-      ctx.strokeStyle = '#f59e0b';
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
+      ctx.setLineDash([6, 8]);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(player.x, player.y);
+      ctx.lineTo(pointer.worldX, pointer.worldY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const hammerGrad = ctx.createLinearGradient(player.x, player.y, player.tipX, player.tipY);
+      hammerGrad.addColorStop(0, '#fbbf24');
+      hammerGrad.addColorStop(1, '#f97316');
+      ctx.strokeStyle = hammerGrad;
       ctx.lineWidth = 8;
       ctx.beginPath();
       ctx.moveTo(player.x, player.y);
       ctx.lineTo(player.tipX, player.tipY);
       ctx.stroke();
 
-      ctx.fillStyle = '#f97316';
+      const tipGlow = ctx.createRadialGradient(player.tipX, player.tipY, 2, player.tipX, player.tipY, 20);
+      tipGlow.addColorStop(0, '#fb923c');
+      tipGlow.addColorStop(1, '#ea580c');
+      ctx.fillStyle = tipGlow;
       ctx.beginPath();
       ctx.arc(player.tipX, player.tipY, player.tipR, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.fillStyle = '#2563eb';
+      const bodyGrad = ctx.createRadialGradient(
+        player.x + 8,
+        player.y - 10,
+        4,
+        player.x,
+        player.y,
+        player.r + 6
+      );
+      bodyGrad.addColorStop(0, '#60a5fa');
+      bodyGrad.addColorStop(1, '#1d4ed8');
+      ctx.fillStyle = bodyGrad;
       ctx.beginPath();
       ctx.arc(player.x, player.y, player.r, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.fillStyle = '#93c5fd';
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(player.x + 6, player.y - 6, player.r * 0.35, 0, Math.PI * 2);
+      ctx.arc(player.x, player.y, player.r - 1.5, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.fillStyle = '#dbeafe';
+      ctx.beginPath();
+      ctx.arc(player.x + 6, player.y - 7, player.r * 0.35, 0, Math.PI * 2);
       ctx.fill();
 
+      ctx.fillStyle = '#0f172a';
+      ctx.beginPath();
+      ctx.arc(player.x + 9, player.y - 8, 2.3, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = '#22c55e';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(checkpointX, checkpointY + 30, 22, 0, Math.PI * 2);
+      ctx.stroke();
+
+      for (const p of particles) {
+        const a = 1 - p.age / p.life;
+        ctx.globalAlpha = a;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * a, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
       ctx.restore();
+
+      const vignette = ctx.createRadialGradient(W * 0.5, H * 0.5, H * 0.26, W * 0.5, H * 0.5, H * 0.78);
+      vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
+      vignette.addColorStop(1, 'rgba(0, 0, 0, 0.45)');
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, W, H);
     }
 
     function frame() {
-      update();
+      updatePhysics();
+      updateParticles();
+      updateStats();
       drawBackground();
       drawWorld();
       requestAnimationFrame(frame);
@@ -457,26 +732,42 @@
     wrap.addEventListener('pointerdown', (e) => {
       pointer.active = true;
       wrap.setPointerCapture(e.pointerId);
-      updatePointer(e.clientX, e.clientY);
-      messageEl.textContent = 'Тяни молот по дуге, чтобы набрать импульс';
+      updatePointerFromInput(e.clientX, e.clientY);
+      messageEl.innerHTML = 'Тяни по дуге, чтобы разгоняться';
     });
 
     wrap.addEventListener('pointermove', (e) => {
       if (!pointer.active) return;
-      updatePointer(e.clientX, e.clientY);
+      updatePointerFromInput(e.clientX, e.clientY);
     });
 
-    wrap.addEventListener('pointerup', (e) => {
+    function releasePointer(e) {
       pointer.active = false;
-      wrap.releasePointerCapture(e.pointerId);
+      if (wrap.hasPointerCapture(e.pointerId)) {
+        wrap.releasePointerCapture(e.pointerId);
+      }
+    }
+
+    wrap.addEventListener('pointerup', releasePointer);
+    wrap.addEventListener('pointercancel', releasePointer);
+
+    document.addEventListener('keydown', (e) => {
+      if (e.code in keys) {
+        keys[e.code] = true;
+        e.preventDefault();
+      }
     });
 
-    wrap.addEventListener('pointercancel', (e) => {
-      pointer.active = false;
-      wrap.releasePointerCapture(e.pointerId);
+    document.addEventListener('keyup', (e) => {
+      if (e.code in keys) {
+        keys[e.code] = false;
+        e.preventDefault();
+      }
     });
 
-    tg && tg.MainButton.onClick(() => resetGame());
+    if (tg) {
+      tg.MainButton.onClick(() => resetGame());
+    }
 
     resetGame();
     requestAnimationFrame(frame);
